@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Personal Knowledge Base</title>
+  <style>
+    :root{--bg:#0f1724;--card:#0b1220;--muted:#9aa4b2;--accent:#7dd3fc}
+    html,body{height:100%;margin:0;font-family:Inter,system-ui,Segoe UI,Roboto,'Helvetica Neue',Arial;background:linear-gradient(180deg,#071227 0%,#08121b 100%);color:#e6eef6}
+    .container{max-width:1000px;margin:28px auto;padding:20px}
+    header{display:flex;gap:12px;align-items:center}
+    h1{margin:0;font-size:20px}
+    .controls{display:flex;gap:8px;margin:14px 0;flex-wrap:wrap}
+    input[type=search],select{background:transparent;border:1px solid rgba(255,255,255,0.06);padding:10px;border-radius:8px;color:inherit;min-width:180px}
+    button{background:var(--accent);border:none;padding:10px 12px;border-radius:8px;color:#07243a;cursor:pointer}
+    .grid{display:grid;grid-template-columns:1fr;gap:12px}
+    .card{background:rgba(255,255,255,0.02);padding:14px;border-radius:10px;border:1px solid rgba(255,255,255,0.02)}
+    .meta{font-size:13px;color:var(--muted);margin-bottom:8px}
+    .tags{display:inline-flex;gap:6px;flex-wrap:wrap}
+    .tag{background:rgba(125,211,252,0.12);padding:4px 8px;border-radius:999px;font-size:12px;color:var(--accent);cursor:pointer}
+    pre{background:#02121a;padding:12px;border-radius:8px;overflow:auto;font-family:SFMono-Regular,Menlo,Monaco,Consolas,'Liberation Mono','Courier New',monospace;font-size:13px}
+    .controls .small{padding:8px 10px}
+    .results-info{color:var(--muted);font-size:13px;margin-bottom:6px}
+    .footer{margin-top:18px;color:var(--muted);font-size:13px}
+    .btn-ghost{background:transparent;border:1px solid rgba(255,255,255,0.04);color:var(--muted)}
+    .pager{display:flex;gap:6px;align-items:center}
+    @media(min-width:900px){.grid{grid-template-columns:1fr 1fr}}
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Personal Knowledge Base</h1>
+      <div style="margin-left:auto;color:var(--muted);font-size:13px">Single-file HTML • Search, Tags, Pagination</div>
+    </header>
+
+    <div class="controls">
+      <input id="q" type="search" placeholder="Search title, content, tags..." />
+      <select id="category"><option value="">All categories</option></select>
+      <div id="tagbar" class="tags"></div>
+      <button id="clear" class="small btn-ghost">Clear</button>
+      <button id="addSample" class="small">Add sample</button>
+      <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
+        <button id="export" class="small btn-ghost">Export JSON</button>
+        <button id="import" class="small btn-ghost">Import JSON</button>
+        <input id="filein" type="file" accept="application/json" style="display:none" />
+      </div>
+    </div>
+
+    <div class="results-info"><span id="count">0</span> result(s)</div>
+
+    <div id="list" class="grid"></div>
+
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px">
+      <div class="pager">
+        <button id="prev" class="btn-ghost small">‹ Prev</button>
+        <div id="pageinfo" style="padding:0 8px;color:var(--muted)"></div>
+        <button id="next" class="btn-ghost small">Next ›</button>
+      </div>
+      <div class="footer">Tip: Edit the <code>dataEntries</code> array inside the HTML to add your own items, or use export/import.</div>
+    </div>
+  </div>
+
+  <script>
+    // === DATA SECTION ===
+    // Replace/add entries here, or use Export/Import to manage.
+    const dataEntries = [
+      {
+        id:1,
+        title:'SSH: Common gotchas and fixes',
+        category:'Server',
+        tags:['ssh','linux','tips'],
+        content:'If your ssh session drops, check /var/log/auth.log and ensure you have the correct permissions on ~/.ssh (700) and ~/.ssh/authorized_keys (600). Example: chmod 700 ~/.ssh',
+        code:'chmod 700 ~/.ssh\nchmod 600 ~/.ssh/authorized_keys'
+      },
+      {
+        id:2,
+        title:'Quick SQLite cheat sheet',
+        category:'Database',
+        tags:['sqlite','sql','examples'],
+        content:'Use EXPLAIN QUERY PLAN to understand slow queries. PRAGMA journal_mode=WAL can improve concurrency.',
+        code:"-- list tables\n.tables\n-- export to SQL\n.mode insert\n.output dump.sql\n.dump\n.output stdout"
+      },
+      {
+        id:3,
+        title:'Useful JavaScript snippet: debounce',
+        category:'Code',
+        tags:['javascript','snippet'],
+        content:'Debounce limits how often a function runs. Useful for search boxes and resize events.',
+        code:`function debounce(fn,wait){let t;return(...a)=>{clearTimeout(t);t=setTimeout(()=>fn.apply(this,a),wait)}}`
+      }
+    ];
+
+    // === STATE ===
+    let entries = JSON.parse(localStorage.getItem('kb_entries')) || dataEntries.slice();
+    let page = 1; const perPage = 6; let activeTag = '';
+
+    // === DOM ===
+    const el = {
+      q:document.getElementById('q'),
+      list:document.getElementById('list'),
+      count:document.getElementById('count'),
+      category:document.getElementById('category'),
+      tagbar:document.getElementById('tagbar'),
+      prev:document.getElementById('prev'),
+      next:document.getElementById('next'),
+      pageinfo:document.getElementById('pageinfo'),
+      clear:document.getElementById('clear'),
+      export:document.getElementById('export'),
+      importBtn:document.getElementById('import'),
+      filein:document.getElementById('filein'),
+      addSample:document.getElementById('addSample')
+    };
+
+    function save(){ localStorage.setItem('kb_entries', JSON.stringify(entries)); }
+
+    function distinct(arr){return [...new Set(arr)];}
+
+    function refreshControls(){
+      const cats = distinct(entries.map(e=>e.category||'Uncategorized'));
+      el.category.innerHTML='<option value="">All categories</option>' + cats.map(c=>`<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
+
+      const tags = distinct(entries.flatMap(e=>e.tags||[])).slice().sort();
+      el.tagbar.innerHTML = tags.map(t=>`<div class="tag" data-tag="${escapeHtml(t)}">${escapeHtml(t)}</div>`).join('');
+      Array.from(el.tagbar.children).forEach(n=>n.addEventListener('click',()=>{activeTag = n.dataset.tag; el.q.value=''; page=1; render();}))
+    }
+
+    function escapeHtml(s){return (''+s).replace(/[&<>"']/g,ch=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":"&#39;"})[ch])}
+
+    function matches(entry, q){
+      if(activeTag && !(entry.tags||[]).includes(activeTag)) return false;
+      if(q=='') return true;
+      q = q.toLowerCase();
+      return (entry.title||'').toLowerCase().includes(q) || (entry.content||'').toLowerCase().includes(q) || (entry.tags||[]).join(' ').toLowerCase().includes(q) || (entry.category||'').toLowerCase().includes(q);
+    }
+
+    function render(){
+      const q = el.q.value.trim();
+      const filtered = entries.filter(e=>matches(e,q) && (el.category.value=='' || e.category==el.category.value));
+      el.count.textContent = filtered.length;
+      const pages = Math.max(1, Math.ceil(filtered.length / perPage));
+      if(page>pages) page=pages;
+      const start=(page-1)*perPage; const end = start + perPage;
+      el.list.innerHTML = filtered.slice(start,end).map(e=>renderCard(e)).join('')||'<div style="color:var(--muted)">No results</div>';
+      el.pageinfo.textContent = `Page ${page} / ${pages}`;
+    }
+
+    function renderCard(e){
+      const tags = (e.tags||[]).map(t=>`<span class="tag" data-tag="${escapeHtml(t)}">${escapeHtml(t)}</span>`).join('');
+      return `
+      <article class="card">
+        <div style="display:flex;align-items:center;justify-content:space-between">
+          <div>
+            <div class="meta">${escapeHtml(e.category||'Uncategorized')}</div>
+            <h3 style="margin:0 0 6px 0">${escapeHtml(e.title)}</h3>
+          </div>
+          <div style="text-align:right;color:var(--muted);font-size:12px">ID: ${e.id}</div>
+        </div>
+        <div class="meta">${escapeHtml(e.content)}</div>
+        ${e.code ? `<pre><code>${escapeHtml(e.code)}</code></pre>`: ''}
+        <div style="margin-top:8px" class="tags">${tags}</div>
+      </article>`;
+    }
+
+    // === EVENTS ===
+    el.q.addEventListener('input',()=>{page=1; activeTag=''; render();});
+    el.category.addEventListener('change',()=>{page=1; render();});
+    el.prev.addEventListener('click',()=>{ if(page>1){page--; render();}});
+    el.next.addEventListener('click',()=>{ const q=el.q.value.trim(); const total = entries.filter(e=>matches(e,q) && (el.category.value==''|| e.category==el.category.value)).length; const pages=Math.max(1,Math.ceil(total/perPage)); if(page<pages){page++; render();}});
+    el.clear.addEventListener('click',()=>{el.q.value='';el.category.value='';activeTag='';page=1;render();});
+
+    el.export.addEventListener('click',()=>{
+      const blob = new Blob([JSON.stringify(entries, null, 2)],{type:'application/json'});
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a'); a.href=url; a.download='kb_export.json'; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+    });
+
+    el.importBtn.addEventListener('click',()=>el.filein.click());
+    el.filein.addEventListener('change',async(e)=>{
+      const f = e.target.files[0]; if(!f) return; const text = await f.text(); try{ const parsed = JSON.parse(text); if(Array.isArray(parsed)){ entries = parsed; save(); refreshControls(); render(); alert('Imported '+parsed.length+' entries'); } else alert('JSON must be an array of entries'); }catch(err){alert('Invalid JSON: '+err.message)}
+    });
+
+    el.addSample.addEventListener('click',()=>{
+      const id = (entries.reduce((m,x)=>Math.max(m,x.id||0),0)||0)+1;
+      entries.unshift({id,title:'New Sample '+id,category:'Misc',tags:['sample'],content:'Write notes here',code:''}); save(); refreshControls(); render();
+    })
+
+    // click tags inside list to filter
+    el.list.addEventListener('click', (ev)=>{ const t = ev.target.closest('.tag'); if(t && t.dataset.tag){ activeTag = t.dataset.tag; el.q.value=''; page=1; render(); } });
+
+    // first-time setup
+    refreshControls(); render();
+  </script>
+</body>
+</html>
